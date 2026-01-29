@@ -1,0 +1,6 @@
+.vscode
+.gitignore
+resources/*
+!resources/
+segregated/*
+!segregated/
