@@ -16,7 +16,6 @@ import java.util.HashSet;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.stream.Stream;
 
 public class Segregate {
     private static final Set<String> IMAGE_EXTS = new HashSet<>(Arrays.asList(
