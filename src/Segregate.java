@@ -67,6 +67,9 @@ public class Segregate {
         Path othersDir = segregatedDir.resolve("others");
 
         final long[] processed = {0};
+        final long[] total = {0};
+        final long[] unique = {0};
+        final long[] duplicates = {0};
         long progressEvery = 500;
 
         Map<Long, Object> seenSizes = new HashMap<>();
@@ -81,6 +84,7 @@ public class Segregate {
                     return FileVisitResult.CONTINUE;
                 }
 
+                total[0]++;
                 long size = attrs.size();
                 Object entry = seenSizes.get(size);
                 if (entry == null) {
@@ -89,6 +93,7 @@ public class Segregate {
                     String existingDigest = fileDigest((Path) entry);
                     String digest = fileDigest(file);
                     if (digest.equals(existingDigest)) {
+                        duplicates[0]++;
                         return FileVisitResult.CONTINUE;
                     }
                     Set<String> digests = new HashSet<>();
@@ -100,6 +105,7 @@ public class Segregate {
                     Set<String> digests = (Set<String>) entry;
                     String digest = fileDigest(file);
                     if (digests.contains(digest)) {
+                        duplicates[0]++;
                         return FileVisitResult.CONTINUE;
                     }
                     digests.add(digest);
@@ -115,6 +121,7 @@ public class Segregate {
                 }
 
                 processed[0]++;
+                unique[0]++;
                 processedProgress(progressEvery, processed[0]);
                 return FileVisitResult.CONTINUE;
             }
@@ -126,6 +133,9 @@ public class Segregate {
         });
 
         System.out.println();
+        System.out.println("Total files: " + total[0]);
+        System.out.println("Unique files: " + unique[0]);
+        System.out.println("Duplicate files: " + duplicates[0]);
     }
 
     private static String fileExtension(Path path) {
