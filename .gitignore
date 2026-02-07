@@ -7,3 +7,5 @@ resources/*
 !resources/
 segregated/*
 !segregated/
+detected/*
+!detected/
