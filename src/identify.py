@@ -8,6 +8,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk
 
+import numpy as np
 from PIL import Image, ImageTk
 from deepface import DeepFace
 
@@ -37,6 +38,18 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=320,
         help="Max display size for the preview image.",
+    )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=0.6,
+        help="Cosine similarity threshold to auto-suggest a label.",
+    )
+    parser.add_argument(
+        "--max-ref-per-label",
+        type=int,
+        default=2,
+        help="Max reference images per existing label to build suggestions.",
     )
     return parser.parse_args()
 
@@ -71,15 +84,21 @@ class LabelerApp:
         identified_dir: Path,
         model_name: str,
         max_size: int,
+        threshold: float,
+        max_ref_per_label: int,
     ) -> None:
         self.root = root
         self.images = images
         self.identified_dir = identified_dir
         self.model_name = model_name
         self.max_size = max_size
+        self.threshold = threshold
+        self.max_ref_per_label = max_ref_per_label
         self.index = 0
         self.current_image: Image.Image | None = None
         self.current_photo: ImageTk.PhotoImage | None = None
+        self.current_embedding: np.ndarray | None = None
+        self.label_index: dict[str, list[np.ndarray]] = {}
 
         self.root.title("Face Labeler")
         self.root.geometry("900x520")
@@ -103,11 +122,21 @@ class LabelerApp:
         self.status_label = ttk.Label(side, textvariable=self.status_var, wraplength=280)
         self.status_label.pack(anchor=tk.W, pady=(4, 12))
 
+        ttk.Label(side, text="Suggestion").pack(anchor=tk.W, pady=(6, 0))
+        self.suggest_var = tk.StringVar(value="(none)")
+        self.suggest_label = ttk.Label(side, textvariable=self.suggest_var, wraplength=280)
+        self.suggest_label.pack(anchor=tk.W)
+
         btn_frame = ttk.Frame(side)
         btn_frame.pack(anchor=tk.W, pady=(8, 0))
 
+        self.use_suggest_btn = ttk.Button(
+            btn_frame, text="Use Suggestion", command=self.use_suggestion
+        )
+        self.use_suggest_btn.pack(anchor=tk.W, fill=tk.X)
+
         self.save_btn = ttk.Button(btn_frame, text="Save Label", command=self.save_current)
-        self.save_btn.pack(anchor=tk.W, fill=tk.X)
+        self.save_btn.pack(anchor=tk.W, fill=tk.X, pady=(6, 0))
 
         self.skip_btn = ttk.Button(btn_frame, text="Skip", command=self.next_image)
         self.skip_btn.pack(anchor=tk.W, fill=tk.X, pady=(6, 0))
@@ -119,10 +148,77 @@ class LabelerApp:
         self.root.bind("<Right>", lambda _event: self.next_image())
         self.root.bind("<Escape>", lambda _event: self.root.destroy())
 
+        self._build_label_index()
         self.load_current()
 
     def set_status(self, message: str) -> None:
         self.status_var.set(message)
+
+    def _set_suggestion(self, label: str | None, score: float | None) -> None:
+        if not label or score is None:
+            self.suggest_var.set("(none)")
+            self.use_suggest_btn.configure(state=tk.DISABLED)
+            return
+        self.suggest_var.set(f"{label} ({score:.2f})")
+        self.use_suggest_btn.configure(state=tk.NORMAL)
+
+    def _build_label_index(self) -> None:
+        self.set_status("Indexing existing labels...")
+        self.root.update_idletasks()
+        if not self.identified_dir.exists():
+            return
+        for label_dir in sorted(self.identified_dir.iterdir()):
+            if not label_dir.is_dir():
+                continue
+            label = label_dir.name
+            images = iter_images(label_dir)[: self.max_ref_per_label]
+            if not images:
+                continue
+            vectors: list[np.ndarray] = []
+            for img_path in images:
+                embedding = self._get_embedding(img_path)
+                if embedding is None:
+                    continue
+                vectors.append(embedding)
+            if vectors:
+                self.label_index[label] = vectors
+        self.set_status("Ready.")
+
+    def _get_embedding(self, image_path: Path) -> np.ndarray | None:
+        try:
+            reps = DeepFace.represent(
+                img_path=str(image_path),
+                model_name=self.model_name,
+                enforce_detection=False,
+            )
+        except Exception:
+            return None
+        if not reps:
+            return None
+        embedding = reps[0].get("embedding")
+        if embedding is None:
+            return None
+        return np.asarray(embedding, dtype=np.float32)
+
+    def _suggest_label(self, embedding: np.ndarray) -> tuple[str | None, float | None]:
+        best_label: str | None = None
+        best_score: float | None = None
+        for label, vectors in self.label_index.items():
+            for vec in vectors:
+                score = self._cosine_similarity(embedding, vec)
+                if best_score is None or score > best_score:
+                    best_score = score
+                    best_label = label
+        if best_score is None or best_score < self.threshold:
+            return None, None
+        return best_label, best_score
+
+    @staticmethod
+    def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
+        denom = (np.linalg.norm(a) * np.linalg.norm(b))
+        if denom == 0:
+            return -1.0
+        return float(np.dot(a, b) / denom)
 
     def load_current(self) -> None:
         if self.index >= len(self.images):
@@ -130,6 +226,7 @@ class LabelerApp:
             self.save_btn.configure(state=tk.DISABLED)
             self.skip_btn.configure(state=tk.DISABLED)
             self.label_entry.configure(state=tk.DISABLED)
+            self.use_suggest_btn.configure(state=tk.DISABLED)
             return
 
         image_path = self.images[self.index]
@@ -143,15 +240,15 @@ class LabelerApp:
 
         self._display_image(self.current_image)
         self.label_var.set("")
+        self._set_suggestion(None, None)
         self.set_status(f"Scanning {image_path.name} with {self.model_name}...")
         self.root.update_idletasks()
 
         try:
-            DeepFace.represent(
-                img_path=str(image_path),
-                model_name=self.model_name,
-                enforce_detection=False,
-            )
+            self.current_embedding = self._get_embedding(image_path)
+            if self.current_embedding is not None and self.label_index:
+                label, score = self._suggest_label(self.current_embedding)
+                self._set_suggestion(label, score)
             self.set_status(f"Ready to label: {image_path.name}")
         except Exception as exc:  # pragma: no cover - depends on DeepFace runtime
             self.set_status(f"DeepFace failed: {exc}")
@@ -164,6 +261,14 @@ class LabelerApp:
             image = image.resize(new_size, Image.BICUBIC)
         self.current_photo = ImageTk.PhotoImage(image)
         self.image_label.configure(image=self.current_photo)
+
+    def use_suggestion(self) -> None:
+        suggestion = self.suggest_var.get()
+        if suggestion == "(none)":
+            return
+        label = suggestion.split("(", 1)[0].strip()
+        if label:
+            self.label_var.set(label)
 
     def save_current(self) -> None:
         if self.index >= len(self.images):
@@ -180,6 +285,10 @@ class LabelerApp:
         src_path = self.images[self.index]
         dest_path = _unique_destination(dest_dir, src_path.name)
         shutil.copy2(src_path, dest_path)
+        if self.current_embedding is None:
+            self.current_embedding = self._get_embedding(src_path)
+        if self.current_embedding is not None:
+            self.label_index.setdefault(label, []).append(self.current_embedding)
         self.set_status(f"Saved to {dest_path.parent.name}/")
         self.next_image()
 
@@ -204,7 +313,15 @@ def main() -> None:
     identified_dir.mkdir(parents=True, exist_ok=True)
 
     root = tk.Tk()
-    LabelerApp(root, images, identified_dir, args.model, args.size)
+    LabelerApp(
+        root,
+        images,
+        identified_dir,
+        args.model,
+        args.size,
+        args.threshold,
+        args.max_ref_per_label,
+    )
     root.mainloop()
 
 
