@@ -51,6 +51,12 @@ def parse_args() -> argparse.Namespace:
         default=2,
         help="Max reference images per existing label to build suggestions.",
     )
+    parser.add_argument(
+        "--auto-accept-suggestions",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Automatically save when a suggestion meets the threshold.",
+    )
     return parser.parse_args()
 
 
@@ -86,6 +92,7 @@ class LabelerApp:
         max_size: int,
         threshold: float,
         max_ref_per_label: int,
+        auto_accept_suggestions: bool,
     ) -> None:
         self.root = root
         self.images = images
@@ -94,11 +101,13 @@ class LabelerApp:
         self.max_size = max_size
         self.threshold = threshold
         self.max_ref_per_label = max_ref_per_label
+        self.auto_accept_suggestions = auto_accept_suggestions
         self.index = 0
         self.current_image: Image.Image | None = None
         self.current_photo: ImageTk.PhotoImage | None = None
         self.current_embedding: np.ndarray | None = None
         self.label_index: dict[str, list[np.ndarray]] = {}
+        self.auto_accept_var = tk.BooleanVar(value=auto_accept_suggestions)
 
         self.root.title("Face Labeler")
         self.root.geometry("900x520")
@@ -126,6 +135,12 @@ class LabelerApp:
         self.suggest_var = tk.StringVar(value="(none)")
         self.suggest_label = ttk.Label(side, textvariable=self.suggest_var, wraplength=280)
         self.suggest_label.pack(anchor=tk.W)
+        self.auto_accept_check = ttk.Checkbutton(
+            side,
+            text="Auto-accept suggestions",
+            variable=self.auto_accept_var,
+        )
+        self.auto_accept_check.pack(anchor=tk.W, pady=(6, 0))
 
         btn_frame = ttk.Frame(side)
         btn_frame.pack(anchor=tk.W, pady=(8, 0))
@@ -249,6 +264,12 @@ class LabelerApp:
             if self.current_embedding is not None and self.label_index:
                 label, score = self._suggest_label(self.current_embedding)
                 self._set_suggestion(label, score)
+                if label and self.auto_accept_var.get():
+                    self.label_var.set(label)
+                    self.set_status(f"Auto-saved suggestion: {label}")
+                    self.root.update_idletasks()
+                    self.root.after(1, self.save_current)
+                    return
             self.set_status(f"Ready to label: {image_path.name}")
         except Exception as exc:  # pragma: no cover - depends on DeepFace runtime
             self.set_status(f"DeepFace failed: {exc}")
@@ -321,6 +342,7 @@ def main() -> None:
         args.size,
         args.threshold,
         args.max_ref_per_label,
+        args.auto_accept_suggestions,
     )
     root.mainloop()
 
