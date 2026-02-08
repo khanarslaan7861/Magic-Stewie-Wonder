@@ -42,13 +42,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--threshold",
         type=float,
-        default=0.6,
+        default=0.65,
         help="Cosine similarity threshold to auto-suggest a label.",
     )
     parser.add_argument(
         "--max-ref-per-label",
         type=int,
-        default=2,
+        default=4,
         help="Max reference images per existing label to build suggestions.",
     )
     parser.add_argument(
@@ -290,6 +290,7 @@ class LabelerApp:
         label = suggestion.split("(", 1)[0].strip()
         if label:
             self.label_var.set(label)
+            self.save_current()
 
     def save_current(self) -> None:
         if self.index >= len(self.images):
