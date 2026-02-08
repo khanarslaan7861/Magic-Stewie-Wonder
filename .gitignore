@@ -1,7 +1,13 @@
 /venv
 .vscode
 .gitignore
+__pycache__/
+*.pyc
 resources/*
 !resources/
 segregated/*
 !segregated/
+detected/*
+!detected/
+identified/*
+!identified/
